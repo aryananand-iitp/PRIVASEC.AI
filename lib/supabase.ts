@@ -29,7 +29,7 @@ export const supabase = new Proxy({} as SupabaseClient, {
 export type AnalysisRow = {
   id: string;
   user_id: string;
-  source_kind: 'text' | 'image' | 'pdf' | 'video' | 'audio' | 'subtitle' | 'metadata';
+  source_kind: 'text' | 'image' | 'pdf' | 'video' | 'audio' | 'subtitle' | 'metadata' | 'speech';
   original_filename: string | null;
   original_text: string | null;
   protected_text: string | null;

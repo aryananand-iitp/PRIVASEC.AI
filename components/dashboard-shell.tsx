@@ -6,7 +6,7 @@ import Link from 'next/link';
 import {
   LayoutDashboard, ScanLine, ShieldAlert, ShieldCheck, History, FileText,
   BarChart3, GraduationCap, Bell, User, Settings, Lock, LogOut,
-  Menu, X, ChevronLeft, Search, Globe,
+  Menu, X, ChevronLeft, Search, Globe, Video,
 } from 'lucide-react';
 import { useAuth, useLang } from '@/components/providers';
 import { supabase } from '@/lib/supabase';
@@ -29,6 +29,7 @@ type NavItem = {
 const NAV: NavItem[] = [
   { key: 'nav.overview', href: '/dashboard', icon: LayoutDashboard },
   { key: 'nav.analyze', href: '/dashboard/analyze', icon: ScanLine },
+  { key: 'nav.scanner', href: '/dashboard/scanner', icon: Video },
   { key: 'nav.threats', href: '/dashboard/threats', icon: ShieldAlert },
   { key: 'nav.protection', href: '/dashboard/protection', icon: ShieldCheck },
   { key: 'nav.history', href: '/dashboard/history', icon: History },

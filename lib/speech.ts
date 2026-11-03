@@ -53,7 +53,7 @@ export function isSpeechSupported(): boolean {
 
 export interface SpeechHandlers {
   onPartial?: (text: string) => void;
-  onFinal?: (text: string) => void;
+  onFinal?: (text: string, timestamp?: number) => void;
   onError?: (err: string) => void;
   onEnd?: () => void;
   onStart?: () => void;
@@ -101,6 +101,7 @@ export function startSpeech(lang: string, handlers: SpeechHandlers): SpeechSessi
   rec.maxAlternatives = 1;
 
   rec.onstart = () => handlers.onStart?.();
+  let segStart = 0;
   rec.onresult = (e: SpeechRecognitionEvent) => {
     let interim = '';
     let final = '';
@@ -110,13 +111,17 @@ export function startSpeech(lang: string, handlers: SpeechHandlers): SpeechSessi
       else interim += r[0].transcript;
     }
     if (interim) handlers.onPartial?.(interim);
-    if (final) handlers.onFinal?.(final.trim());
+    if (final) {
+      const now = (Date.now() - segStart) / 1000;
+      handlers.onFinal?.(final.trim(), Math.round(now * 100) / 100);
+    }
   };
   rec.onerror = (e: SpeechRecognitionErrorEvent) => handlers.onError?.(e.error);
   rec.onend = () => handlers.onEnd?.();
 
   try {
     rec.start();
+    segStart = Date.now();
   } catch {
     handlers.onError?.('start-failed');
     return null;
