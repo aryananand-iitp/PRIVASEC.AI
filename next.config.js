@@ -14,6 +14,17 @@ const nextConfig = {
     if (!isServer) {
       config.resolve.fallback = { ...config.resolve.fallback, fs: false, path: false };
     }
+    // Exclude native ONNX runtime (onnxruntime-node) — only needed in Node, not browser.
+    // The browser uses onnxruntime-web (WASM) instead.
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      'onnxruntime-node': false,
+    };
+    // Ignore native .node binaries entirely
+    config.module.rules.push({
+      test: /\.node$/,
+      use: 'null-loader',
+    });
     return config;
   },
 };

@@ -27,7 +27,7 @@ export default function ScannerPage() {
   const [extraction, setExtraction] = useState<ExtractionResult | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
-  const [savedAnalysisId, setSavedAnalysisId] = useState<string | null>(null);
+  const [, setSavedAnalysisId] = useState<string | null>(null);
 
   const statuses: StepStatus[] = scannerSteps.map((_, idx) => {
     if (idx < phase) return 'complete';
