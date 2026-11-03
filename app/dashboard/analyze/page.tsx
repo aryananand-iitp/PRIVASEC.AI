@@ -5,11 +5,13 @@ import { useSearchParams } from 'next/navigation';
 import {
   ScanLine, FileText, Image as ImageIcon, FileVideo, FileAudio, Type,
   Upload, X, Loader2, AlertCircle, CheckCircle2, FileCheck2, Languages,
+  Mic, Square,
 } from 'lucide-react';
 import { useAuth } from '@/components/providers';
 import { supabase } from '@/lib/supabase';
 import { explainFindings, computeRiskScore, detectLanguageHint, CATEGORY_LABELS, type Finding } from '@/lib/pii-engine';
 import { ocrImage, ocrPdf } from '@/lib/ocr';
+import { isSpeechSupported, startSpeech, type SpeechSession } from '@/lib/speech';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -18,7 +20,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
-type Kind = 'text' | 'image' | 'pdf' | 'video' | 'audio' | 'subtitle' | 'metadata';
+type Kind = 'text' | 'image' | 'pdf' | 'video' | 'audio' | 'subtitle' | 'metadata' | 'speech';
 
 const KIND_META: Record<Kind, { icon: React.ComponentType<{ className?: string }>; label: string; accept: string; formats: string }> = {
   text: { icon: Type, label: 'Text', accept: '.txt,text/plain', formats: 'TXT' },
@@ -28,6 +30,7 @@ const KIND_META: Record<Kind, { icon: React.ComponentType<{ className?: string }
   audio: { icon: FileAudio, label: 'Audio', accept: '.mp3,.wav,.m4a,audio/*', formats: 'MP3, WAV, M4A' },
   subtitle: { icon: FileText, label: 'Subtitles', accept: '.srt,.vtt,.txt', formats: 'SRT, VTT, TXT' },
   metadata: { icon: FileCheck2, label: 'Metadata', accept: '.jpg,.jpeg,.png,.pdf', formats: 'JPG, PNG, PDF' },
+  speech: { icon: Mic, label: 'Speech', accept: '', formats: 'Live mic' },
 };
 
 const MAX_FILE_BYTES = 1024 * 1024 * 1024; // 1 GB
@@ -52,6 +55,65 @@ export default function AnalyzePage() {
   const [analysisId, setAnalysisId] = useState<string | null>(null);
   const [languageHint, setLanguageHint] = useState<string>('en');
   const inputRef = useRef<HTMLInputElement>(null);
+  const [listening, setListening] = useState(false);
+  const [partialText, setPartialText] = useState('');
+  const [speechSupported, setSpeechSupported] = useState(true);
+  const speechRef = useRef<SpeechSession | null>(null);
+
+  useEffect(() => {
+    setSpeechSupported(isSpeechSupported());
+  }, []);
+
+  function stopListening() {
+    speechRef.current?.stop();
+    speechRef.current = null;
+    setListening(false);
+    setPartialText('');
+  }
+
+  function toggleListening() {
+    if (listening) {
+      stopListening();
+      return;
+    }
+    if (!isSpeechSupported()) {
+      toast.error('Speech recognition not supported', {
+        description: 'Use Chrome or Edge on desktop/Android for live transcription.',
+      });
+      return;
+    }
+    const session = startSpeech(languageHint, {
+      onStart: () => setListening(true),
+      onPartial: (t) => setPartialText(t),
+      onFinal: (t) => {
+        setText((prev) => (prev ? prev + ' ' + t : t));
+        setPartialText('');
+      },
+      onError: (err) => {
+        setListening(false);
+        speechRef.current = null;
+        setPartialText('');
+        if (err === 'not-allowed' || err === 'service-not-allowed') {
+          toast.error('Microphone blocked', { description: 'Allow microphone access in your browser settings.' });
+        } else if (err === 'no-speech') {
+          toast.info('No speech detected', { description: 'Try speaking closer to the microphone.' });
+        } else if (err === 'not-supported' || err === 'start-failed') {
+          toast.error('Speech not available', { description: 'Use Chrome or Edge for live transcription.' });
+          setSpeechSupported(false);
+        } else {
+          toast.error('Transcription error', { description: err });
+        }
+      },
+      onEnd: () => {
+        setListening(false);
+        speechRef.current = null;
+        setPartialText('');
+      },
+    });
+    if (session) speechRef.current = session;
+  }
+
+  useEffect(() => () => stopListening(), []);
 
   useEffect(() => {
     if (initialKind) setKind(initialKind as Kind);
@@ -122,8 +184,8 @@ export default function AnalyzePage() {
           toast.error('Image OCR failed', { description: 'Could not run OCR on this image. Try pasting text manually.' });
         }
       } else if (f.type.startsWith('video/') || f.type.startsWith('audio/')) {
-        toast.info('Video/audio needs a transcript', {
-          description: 'Browser-based speech-to-text is not available. Paste a transcript or subtitle file to run a real PII scan.',
+        toast.info('Use the Speech input for live audio', {
+          description: 'Browser-based speech-to-text is available via the Speech tab. For recorded audio/video, paste a transcript or subtitle file to run a real PII scan.',
         });
         setProcessingPct(100);
       } else {
@@ -225,6 +287,7 @@ export default function AnalyzePage() {
   }
 
   function clearAll() {
+    stopListening();
     setFile(null);
     setText('');
     setExtractedText('');
@@ -298,6 +361,45 @@ export default function AnalyzePage() {
                 Browse files
               </Button>
             </div>
+
+            {kind === 'speech' && (
+              <div className="space-y-3 rounded-lg border border-border/60 bg-muted/20 p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Mic className={cn('h-5 w-5', listening ? 'text-destructive' : 'text-primary')} />
+                    <span className="text-sm font-medium text-foreground">
+                      {listening ? 'Listening…' : 'Ready to transcribe'}
+                    </span>
+                  </div>
+                  {!speechSupported && (
+                    <Badge variant="outline" className="text-xs text-muted-foreground">Not supported in this browser</Badge>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Speak into your microphone. Recognized text appears below and fills the text area automatically. Transcription runs through your browser&rsquo;s speech service — no audio is sent to our servers.
+                </p>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant={listening ? 'destructive' : 'default'}
+                    size="sm"
+                    onClick={toggleListening}
+                    disabled={!speechSupported}
+                  >
+                    {listening ? <Square className="mr-2 h-4 w-4" /> : <Mic className="mr-2 h-4 w-4" />}
+                    {listening ? 'Stop' : 'Start recording'}
+                  </Button>
+                  {listening && (
+                    <div className="flex items-center gap-1.5 text-xs text-destructive">
+                      <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" /> Live
+                    </div>
+                  )}
+                </div>
+                {listening && partialText && (
+                  <p className="rounded-md bg-background p-2 text-xs italic text-muted-foreground">{partialText}…</p>
+                )}
+              </div>
+            )}
 
             {file && (
               <div className="flex items-center justify-between rounded-md border border-border/60 px-3 py-2">
@@ -424,7 +526,7 @@ export default function AnalyzePage() {
       <div className="flex items-start gap-2 rounded-md border border-border/60 bg-muted/30 p-3 text-xs text-muted-foreground">
         <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
         <span>
-          Text and image OCR analysis runs entirely in your browser using Tesseract.js — no file bytes leave your device. PDF OCR uses pdf.js + Tesseract. Video frame analysis and audio transcription require server-side services not available in this environment — for those, paste a transcript or subtitle file. Original file bytes are never stored.
+          Text, image OCR, and speech-to-text analysis all run entirely in your browser — no file bytes or audio leave your device. Text uses pattern matching, images use Tesseract.js, live speech uses your browser&rsquo;s built-in Web Speech API (Chrome/Edge), and scanned PDFs use pdf.js + Tesseract. Video frame analysis still requires a server-side service — for those, paste a transcript or subtitle file. Original file bytes are never stored.
         </span>
       </div>
     </div>

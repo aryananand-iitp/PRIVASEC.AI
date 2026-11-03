@@ -62,7 +62,7 @@ export default function AboutPage() {
       <Card className="border-border/60">
         <CardHeader><CardTitle className="text-lg">Limitations</CardTitle><CardDescription>What we cannot do.</CardDescription></CardHeader>
         <CardContent className="space-y-3 text-sm">
-          <div className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /><p className="text-muted-foreground">Video frame analysis and audio transcription require server-side services not available in this environment.</p></div>
+          <div className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /><p className="text-muted-foreground">Video frame analysis requires server-side services not available in this environment. Live speech-to-text is supported via the browser's Web Speech API (Chrome/Edge).</p></div>
           <div className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /><p className="text-muted-foreground">Face detection, bounding-box visualization, and on-image blurring are not available here.</p></div>
           <div className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /><p className="text-muted-foreground">We do not make compliance certifications (GDPR, HIPAA, etc.). This is a detection tool.</p></div>
           <div className="flex gap-2"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" /><p className="text-muted-foreground">OCR supports English text. Other languages may produce lower-quality results.</p></div>
