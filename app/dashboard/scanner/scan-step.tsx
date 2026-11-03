@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { Checkbox } from '@/components/ui/checkbox';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { explainFindings, computeRiskScore, riskBand, CATEGORY_LABELS, type Finding, type PiiCategory } from '@/lib/pii-engine';
+import { explainFindings, computeRiskScore, riskBand, CATEGORY_LABELS, type Finding } from '@/lib/pii-engine';
 import { segmentsToText, type TranscriptSegment } from '@/lib/transcribe';
 
 export type ScanResult = {
@@ -37,19 +37,24 @@ export function ScanStep({
     setScanning(true);
     setFindings([]);
     setDone(false);
-    // Small delay so the UI can show the scanning state
-    await new Promise((r) => setTimeout(r, 400));
-    const text = segmentsToText(segments);
-    const detected = explainFindings(text);
-    const riskScore = computeRiskScore(detected);
-    setFindings(detected);
-    setScore(riskScore);
-    setScanning(false);
-    setDone(true);
-    if (detected.length === 0) {
-      toast.success('No personal information detected', { description: 'The transcript appears clean.' });
-    } else {
-      toast.info(`${detected.length} findings detected`, { description: `Risk score: ${riskScore}/100.` });
+    try {
+      // Small delay so the UI can show the scanning state
+      await new Promise((r) => setTimeout(r, 400));
+      const text = segmentsToText(segments);
+      const detected = explainFindings(text);
+      const riskScore = computeRiskScore(detected);
+      setFindings(detected);
+      setScore(riskScore);
+      setDone(true);
+      if (detected.length === 0) {
+        toast.success('No personal information detected', { description: 'The transcript appears clean.' });
+      } else {
+        toast.info(`${detected.length} findings detected`, { description: `Risk score: ${riskScore}/100.` });
+      }
+    } catch (err) {
+      toast.error('Scan failed', { description: err instanceof Error ? err.message : 'Unknown error' });
+    } finally {
+      setScanning(false);
     }
   }
 
@@ -134,7 +139,7 @@ export function ScanStep({
                 : f.severity === 'medium' ? 'border-accent/40 text-accent-foreground'
                 : 'border-muted-foreground/40 text-muted-foreground';
               return (
-                <div key={i} className={cn('rounded-md border p-3 transition-opacity', isFP ? 'opacity-50 border-dashed' : 'border-border/60')}>
+                <div key={key} className={cn('rounded-md border p-3 transition-opacity', isFP ? 'opacity-50 border-dashed' : 'border-border/60')}>
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">

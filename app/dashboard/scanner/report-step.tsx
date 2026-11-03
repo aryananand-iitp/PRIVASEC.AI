@@ -1,12 +1,12 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useMemo, type ReactNode } from 'react';
 import { BarChart3, AlertTriangle, CheckCircle2, RotateCcw, ShieldCheck, FileDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { cn } from '@/lib/utils';
-import { riskBand, CATEGORY_LABELS, type Finding, type PiiCategory } from '@/lib/pii-engine';
+import { riskBand, computeRiskScore, CATEGORY_LABELS, type Finding, type PiiCategory } from '@/lib/pii-engine';
 import type { ScanResult } from './scan-step';
 import type { TranscriptSegment } from '@/lib/transcribe';
 
@@ -28,11 +28,7 @@ export function ReportStep({
   );
   const validScore = useMemo(() => {
     if (validFindings.length === 0) return 0;
-    // Recompute without false positives
-    let raw = 0;
-    const weights: Record<string, number> = { low: 4, medium: 12, high: 25, critical: 40 };
-    for (const f of validFindings) raw += weights[f.severity] * f.confidence;
-    return Math.max(1, Math.min(100, Math.round(raw / (1 + raw * 0.012))));
+    return computeRiskScore(validFindings);
   }, [validFindings]);
 
   const band = riskBand(validScore);
@@ -54,22 +50,27 @@ export function ReportStep({
     return m;
   }, [validFindings]);
 
-  // Build highlighted transcript
+  // Build highlighted transcript — use the same join logic as segmentsToText
+  // to keep highlight offsets aligned with the concatenated text the PII engine scanned.
   const highlightedSegments = useMemo(() => {
-    // Rebuild offsets per segment
-    let offset = 0;
+    // segmentsToText does: join(' ').replace(/\s+/g, ' ').trim()
+    // We reconstruct the *actual* character positions by joining non-empty trimmed texts with single spaces.
+    const trimmed = segments.map((s) => s.text.trim());
     const offsets: number[] = [];
-    for (const s of segments) {
+    let offset = 0;
+    for (let i = 0; i < trimmed.length; i++) {
+      if (i > 0 && trimmed[i - 1].length > 0) offset += 1; // space between non-empty segments
       offsets.push(offset);
-      offset += s.text.length + 1;
+      offset += trimmed[i].length;
     }
     return segments.map((s, idx) => {
       const segStart = offsets[idx];
-      const segEnd = segStart + s.text.length;
+      const segLen = trimmed[idx].length;
+      const segEnd = segStart + segLen;
       const segFindings = validFindings
         .filter((f) => f.start >= segStart && f.start < segEnd)
-        .map((f) => ({ ...f, relStart: f.start - segStart, relEnd: f.end - segStart }));
-      return { ...s, segFindings };
+        .map((f) => ({ ...f, relStart: f.start - segStart, relEnd: Math.min(f.end, segEnd) - segStart }));
+      return { ...s, displayText: s.text, segFindings };
     });
   }, [segments, validFindings]);
 
@@ -96,7 +97,9 @@ export function ReportStep({
     const a = document.createElement('a');
     a.href = url;
     a.download = `privacy-report-${Date.now()}.json`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 
@@ -205,7 +208,7 @@ export function ReportStep({
             {highlightedSegments.map((seg) => (
               <div key={seg.id} className="flex gap-2 text-sm">
                 <span className="shrink-0 font-mono text-xs text-muted-foreground">{formatTime(seg.start)}</span>
-                <span className="flex-1 text-foreground">{renderHighlighted(seg.text, seg.segFindings)}</span>
+                <span className="flex-1 text-foreground">{renderHighlighted(seg.displayText, seg.segFindings)}</span>
               </div>
             ))}
           </div>
@@ -224,13 +227,14 @@ export function ReportStep({
           <CardContent>
             <div className="space-y-2">
               {validFindings.map((f, i) => {
+                const fKey = `${f.category}-${f.start}`;
                 const sevColor =
                   f.severity === 'critical' ? 'border-destructive/40 text-destructive'
                   : f.severity === 'high' ? 'border-warning/40 text-warning-foreground'
                   : f.severity === 'medium' ? 'border-accent/40 text-accent-foreground'
                   : 'border-muted-foreground/40 text-muted-foreground';
                 return (
-                  <div key={i} className="rounded-md border border-border/60 p-3">
+                  <div key={fKey} className="rounded-md border border-border/60 p-3">
                     <div className="flex items-center gap-2">
                       <Badge variant="outline" className={cn('text-xs', sevColor)}>{f.severity}</Badge>
                       <span className="text-sm font-medium text-foreground">{CATEGORY_LABELS[f.category]}</span>
@@ -269,7 +273,7 @@ export function ReportStep({
 function renderHighlighted(text: string, findings: { relStart: number; relEnd: number; severity: string }[]) {
   if (findings.length === 0) return text;
   const sorted = [...findings].sort((a, b) => a.relStart - b.relStart);
-  const parts: React.ReactNode[] = [];
+  const parts: ReactNode[] = [];
   let last = 0;
   for (let i = 0; i < sorted.length; i++) {
     const f = sorted[i];
@@ -279,11 +283,11 @@ function renderHighlighted(text: string, findings: { relStart: number; relEnd: n
       : f.severity === 'medium' ? 'bg-accent/20 text-accent-foreground border border-accent/30'
       : 'bg-muted text-muted-foreground border border-muted-foreground/30';
     parts.push(
-      <mark key={i} className={cn('rounded px-0.5 font-medium', cls)}>
-        {text.slice(f.relStart, f.relEnd)}
+      <mark key={`hl-${i}`} className={cn('rounded px-0.5 font-medium', cls)}>
+        {text.slice(f.relStart, Math.min(f.relEnd, text.length))}
       </mark>
     );
-    last = f.relEnd;
+    last = Math.max(last, f.relEnd);
   }
   if (last < text.length) parts.push(text.slice(last));
   return parts;

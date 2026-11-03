@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { ShieldCheck, Loader2, Eye, EyeOff, CheckCircle2, AlertTriangle, Download, FileLock2 } from 'lucide-react';
 import { useAuth } from '@/components/providers';
 import { supabase, type AnalysisRow, type DetectionRow } from '@/lib/supabase';
-import { applyRedaction, verifyRedaction, type RedactMode, CATEGORY_LABELS, type PiiCategory } from '@/lib/pii-engine';
+import { applyRedaction, verifyRedaction, explainFindings, type RedactMode, CATEGORY_LABELS, type PiiCategory } from '@/lib/pii-engine';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -34,7 +34,7 @@ export default function ProtectionPage() {
       if (!session || !id) { setLoading(false); return; }
       const [{ data: a }, { data: d }] = await Promise.all([
         supabase.from('analyses').select('*').eq('id', id).eq('user_id', session.user.id).maybeSingle(),
-        supabase.from('detections').select('*').eq('analysis_id', id).eq('user_id', session.user.id).order('severity', { ascending: false }),
+        supabase.from('detections').select('*').eq('analysis_id', id).eq('user_id', session.user.id).order('created_at', { ascending: false }),
       ]);
       setAnalysis(a as AnalysisRow | null);
       setDetections((d as DetectionRow[]) ?? []);
@@ -72,36 +72,45 @@ export default function ProtectionPage() {
     if (!analysis || !analysis.original_text || !session) return;
     setApplying(true);
     setVerification(null);
-    // Re-detect on the original text so we have real offsets to replace.
-    const { explainFindings } = await import('@/lib/pii-engine');
-    const fresh = explainFindings(analysis.original_text);
-    // Match stored detections to fresh findings by masked_value+category for selection.
-    const selectedCats = new Set(detections.filter((d) => selected.has(d.id)).map((d) => d.category + '|' + d.masked_value));
-    const toApply = fresh.filter((f) => selectedCats.has(f.category + '|' + f.masked_value));
-    // Use a keyed selection set that matches fresh findings' category+start.
-    const freshSelected = new Set(toApply.map((f) => f.category + '|' + f.start));
-    const out = applyRedaction(analysis.original_text, fresh, mode, freshSelected);
-    setProtectedText(out);
-    const ver = verifyRedaction(out, fresh.filter((f) => selectedCats.has(f.category + '|' + f.masked_value)));
-    setVerification(ver);
+    try {
+      // Re-detect on the original text so we have real offsets to replace.
+      const fresh = explainFindings(analysis.original_text);
+      // Match stored detections to fresh findings by masked_value+category for selection.
+      const selectedCats = new Set(detections.filter((d) => selected.has(d.id)).map((d) => d.category + '|' + d.masked_value));
+      const toApply = fresh.filter((f) => selectedCats.has(f.category + '|' + f.masked_value));
+      // Use a keyed selection set that matches fresh findings' category+start.
+      const freshSelected = new Set(toApply.map((f) => f.category + '|' + f.start));
+      const out = applyRedaction(analysis.original_text, fresh, mode, freshSelected);
+      setProtectedText(out);
+      const ver = verifyRedaction(out, fresh.filter((f) => selectedCats.has(f.category + '|' + f.masked_value)));
+      setVerification(ver);
 
-    // Persist protected text + update detection statuses.
-    await supabase.from('analyses').update({ protected_text: out, status: 'protected' }).eq('id', analysis.id);
-    const ids = detections.filter((d) => selected.has(d.id)).map((d) => d.id);
-    if (ids.length) {
-      await supabase.from('detections')
-        .update({ redaction_status: mode, verification_status: ver.remainingCount === 0 ? 'verified_passed' : 'verified_failed' })
-        .in('id', ids);
+      // Map RedactMode to the DB redaction_status enum ('mask' -> 'masked')
+      const dbStatus = mode === 'mask' ? 'masked' : 'redacted';
+
+      // Persist protected text + update detection statuses.
+      const { error: updErr } = await supabase.from('analyses').update({ protected_text: out, status: 'protected' }).eq('id', analysis.id);
+      if (updErr) throw new Error(`Failed to save protected text: ${updErr.message}`);
+      const ids = detections.filter((d) => selected.has(d.id)).map((d) => d.id);
+      if (ids.length) {
+        const { error: detErr } = await supabase.from('detections')
+          .update({ redaction_status: dbStatus, verification_status: ver.remainingCount === 0 ? 'verified_passed' : 'verified_failed' })
+          .in('id', ids);
+        if (detErr) throw new Error(`Failed to update detection statuses: ${detErr.message}`);
+      }
+      await supabase.from('activity').insert({ user_id: session.user.id, event: 'protection_applied', detail: `${mode} · ${ids.length} findings` });
+      await supabase.from('notifications').insert({
+        user_id: session.user.id,
+        title: 'Protection applied',
+        body: ver.remainingCount === 0 ? 'All selected findings were removed and verified.' : `${ver.remainingCount} findings could not be fully removed.`,
+        kind: ver.remainingCount === 0 ? 'success' : 'warning',
+      });
+      toast.success('Protection applied', { description: ver.remainingCount === 0 ? 'Verified clean.' : `${ver.remainingCount} remaining.` });
+    } catch (err) {
+      toast.error('Protection failed', { description: err instanceof Error ? err.message : 'Unknown error' });
+    } finally {
+      setApplying(false);
     }
-    await supabase.from('activity').insert({ user_id: session.user.id, event: 'protection_applied', detail: `${mode} · ${ids.length} findings` });
-    await supabase.from('notifications').insert({
-      user_id: session.user.id,
-      title: 'Protection applied',
-      body: ver.remainingCount === 0 ? 'All selected findings were removed and verified.' : `${ver.remainingCount} findings could not be fully removed.`,
-      kind: ver.remainingCount === 0 ? 'success' : 'warning',
-    });
-    setApplying(false);
-    toast.success('Protection applied', { description: ver.remainingCount === 0 ? 'Verified clean.' : `${ver.remainingCount} remaining.` });
   }
 
   function downloadProtected() {
@@ -110,8 +119,12 @@ export default function ProtectionPage() {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `protected-${analysis.original_filename || 'analysis.txt'}`;
+    // Normalize to .txt extension since we export plain text
+    const baseName = (analysis.original_filename || 'analysis').replace(/\.[^.]+$/, '');
+    a.download = `protected-${baseName}.txt`;
+    document.body.appendChild(a);
     a.click();
+    document.body.removeChild(a);
     URL.revokeObjectURL(url);
   }
 

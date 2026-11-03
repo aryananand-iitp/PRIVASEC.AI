@@ -24,6 +24,8 @@ async function getWhisper(): Promise<Pipeline> {
     whisperPromise = pipeline('automatic-speech-recognition', 'Xenova/whisper-tiny', {
       progress_callback: () => {},
     }) as Promise<Pipeline>;
+    // If the model fails to load, clear the cached promise so retries are possible.
+    whisperPromise.catch(() => { whisperPromise = null; });
   }
   return whisperPromise;
 }
@@ -33,6 +35,9 @@ async function getWhisper(): Promise<Pipeline> {
 async function decodeAudio(file: Blob, onProgress?: TranscribeProgress): Promise<Float32Array> {
   onProgress?.(5, 'Decoding audio…');
   const arrayBuf = await file.arrayBuffer();
+  // Copy the buffer before decoding — decodeAudioData may detach/transfer it,
+  // making the original unusable for a fallback attempt.
+  const copy = arrayBuf.slice(0);
   const AudioCtx: typeof AudioContext =
     (window as any).AudioContext || (window as any).webkitAudioContext;
   const audioCtx = new AudioCtx();
@@ -40,10 +45,9 @@ async function decodeAudio(file: Blob, onProgress?: TranscribeProgress): Promise
   try {
     decoded = await audioCtx.decodeAudioData(arrayBuf);
   } catch {
-    // Some video containers need a different approach — try again with a copy
-    decoded = await audioCtx.decodeAudioData(arrayBuf.slice(0));
+    decoded = await audioCtx.decodeAudioData(copy);
   }
-  audioCtx.close();
+  await audioCtx.close();
 
   const targetSampleRate = 16000;
   const numChannels = decoded.numberOfChannels;
@@ -108,7 +112,7 @@ export async function transcribeAudio(
       segments.push({
         id: `seg-${i}`,
         start: Math.round((c.timestamp?.[0] ?? 0) * 100) / 100,
-        end: Math.round((c.timestamp?.[1] ?? 0) * 100) / 100,
+        end: Math.round(Math.max(c.timestamp?.[1] ?? 0, c.timestamp?.[0] ?? 0) * 100) / 100,
         text: (c.text ?? '').trim(),
       });
     }
